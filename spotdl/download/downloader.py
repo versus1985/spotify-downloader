@@ -385,12 +385,35 @@ class Downloader:
         - tuple with download url and audio provider if successful.
         """
 
-        for audio_provider in self.audio_providers:
-            url = audio_provider.search(song, self.settings["only_verified_results"])
-            if url:
-                return url
+        # Track which providers failed due to errors (not just no results)
+        provider_errors = []
 
-            logger.debug("%s failed to find %s", audio_provider.name, song.display_name)
+        for audio_provider in self.audio_providers:
+            try:
+                url = audio_provider.search(song, self.settings["only_verified_results"])
+                if url:
+                    return url
+
+                logger.debug("%s failed to find %s", audio_provider.name, song.display_name)
+            except Exception as exc:
+                # Log the error and try the next provider
+                error_msg = str(exc)
+                logger.warning(
+                    "%s encountered an error while searching for %s: %s",
+                    audio_provider.name,
+                    song.display_name,
+                    error_msg
+                )
+                provider_errors.append(f"{audio_provider.name}: {error_msg}")
+                # Continue to the next provider instead of failing completely
+                continue
+
+        # If all providers failed, provide detailed error information
+        if provider_errors:
+            error_details = "; ".join(provider_errors)
+            raise LookupError(
+                f"All providers failed for song: {song.display_name}. Errors: {error_details}"
+            )
 
         raise LookupError(f"No results found for song: {song.display_name}")
 

@@ -289,6 +289,100 @@ def get_simple_songs(
                 for track in json.load(save_file):
                     # Append to songs
                     songs.append(Song.from_dict(track))
+        elif "youtube.com/watch?v=" in request or "youtu.be/" in request:
+            # Handle regular YouTube URLs directly without Spotify API
+            # to avoid rate limits - use yt-dlp to extract metadata
+            try:
+                import yt_dlp
+                
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': False,
+                }
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(request, download=False)
+                    
+                    # Extract video ID from URL
+                    if "youtube.com/watch?v=" in request:
+                        video_id = request.split("watch?v=")[1].split("&")[0]
+                    elif "youtu.be/" in request:
+                        video_id = request.split("youtu.be/")[1].split("?")[0]
+                    else:
+                        video_id = info.get('id', 'unknown')
+                    
+                    # Create a Song object with data from YouTube
+                    yt_song = Song(
+                        name=info.get('title', 'Unknown Title'),
+                        artists=[info.get('uploader', 'Unknown Artist')],
+                        artist=info.get('uploader', 'Unknown Artist'),
+                        genres=[],
+                        disc_number=1,
+                        disc_count=1,
+                        album_name=info.get('title', 'Unknown Album'),
+                        album_artist=info.get('uploader', 'Unknown Artist'),
+                        duration=int(info.get('duration', 0)),
+                        year=0,
+                        date="",
+                        track_number=1,
+                        tracks_count=1,
+                        song_id=video_id,
+                        explicit=False,
+                        publisher="",
+                        url=request,
+                        isrc=None,
+                        cover_url=info.get('thumbnail', f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg"),
+                        copyright_text=None,
+                        download_url=request,
+                        lyrics=None,
+                        popularity=None,
+                        album_id=None,
+                    )
+                    songs.append(yt_song)
+                    logger.info("Created song from YouTube URL (bypassing Spotify API): %s", info.get('title'))
+            except Exception as exc:
+                logger.error(
+                    "Failed to get YouTube video data: %s. "
+                    "Cannot proceed without Spotify API (rate limited).",
+                    exc
+                )
+                # Don't fallback to search_term as it will hit Spotify rate limit
+                # Instead create a minimal song with URL only
+                video_id = "unknown"
+                if "youtube.com/watch?v=" in request:
+                    video_id = request.split("watch?v=")[1].split("&")[0]
+                elif "youtu.be/" in request:
+                    video_id = request.split("youtu.be/")[1].split("?")[0]
+                    
+                yt_song = Song(
+                    name="YouTube Video (Metadata unavailable)",
+                    artists=["Unknown Artist"],
+                    artist="Unknown Artist",
+                    genres=[],
+                    disc_number=1,
+                    disc_count=1,
+                    album_name="Unknown Album",
+                    album_artist="Unknown Artist",
+                    duration=0,
+                    year=0,
+                    date="",
+                    track_number=1,
+                    tracks_count=1,
+                    song_id=video_id,
+                    explicit=False,
+                    publisher="",
+                    url=request,
+                    isrc=None,
+                    cover_url=f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
+                    copyright_text=None,
+                    download_url=request,
+                    lyrics=None,
+                    popularity=None,
+                    album_id=None,
+                )
+                songs.append(yt_song)
+                logger.warning("Using minimal metadata for YouTube URL to avoid Spotify rate limit")
         else:
             songs.append(Song.from_search_term(request))
 
@@ -547,6 +641,13 @@ def reinit_song(song: Song) -> Song:
     """
 
     data = song.json
+    
+    # If the song was created from a YouTube URL (has download_url and non-Spotify URL),
+    # skip Spotify reinitialization to avoid rate limits
+    if data.get("url") and ("youtube.com" in data["url"] or "youtu.be" in data["url"]):
+        logger.debug("Skipping Spotify reinitialization for YouTube URL: %s", data["url"])
+        return Song(**data)
+    
     if data.get("url"):
         new_data = Song.from_url(data["url"]).json
     elif data.get("song_id"):
